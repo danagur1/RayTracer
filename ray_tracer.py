@@ -10,6 +10,7 @@ from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
 
+EPSILON = 0.0001  # to avoid numeric errors
 
 def parse_scene_file(file_path):
     objects = []
@@ -67,19 +68,18 @@ def calc_camera_axis(E, up, look_at):
 def calc_rot_matrix(E, up, look_at):
     # find camera z axis (look at)
     look_at_dir = look_at - E
-    camera_z_axis = look_at_dir / np.linalg.norm(look_at_dir)
+    camera_z_axis = normalize_vec(look_at_dir)
 
     # find camera y axis (up)
     up_fixed = up - np.dot(up, camera_z_axis) * camera_z_axis
-    camera_y_axis = up_fixed / np.linalg.norm(up_fixed)
+    camera_y_axis = normalize_vec(up_fixed)
 
-    # camera x axis (left)
+    # camera x axis (right)
     camera_x_axis = np.cross(camera_y_axis, camera_z_axis)
 
     x_axis, y_axis, z_axis = np.array([1, 0, 0]), np.array([0, 1, 0]), np.array([0, 0, 1])  # real axis
     sin_x, cos_x = calc_sin_cos_vectors(camera_x_axis, x_axis)
     sin_y, cos_y = calc_sin_cos_vectors(camera_y_axis, y_axis)
-
     return np.array([[cos_y, 0, sin_y],
                      [-sin_x * sin_y, cos_x, sin_x * cos_y],
                      [-cos_x * sin_y, -sin_x, cos_x * cos_y]])
@@ -87,11 +87,11 @@ def calc_rot_matrix(E, up, look_at):
 
 def calc_sin_cos_vectors(v1, v2):
     # return the sin() and cos() functions on the angle between 2 vectors
-    dot_product = np.dot(v1, v2)
+    dot_product = np.dot(normalize_vec(v1), normalize_vec(v2))
     magnitude_v1 = np.linalg.norm(v1)
     magnitude_v2 = np.linalg.norm(v2)
     cos_angle = dot_product / (magnitude_v1 * magnitude_v2)
-    angle = np.arccos(cos_angle)
+    angle = np.arccos(max(-1.0, min(1.0, cos_angle)))  # addeed clap for numeric problem hanling
     return np.sin(angle), cos_angle
 
 
@@ -113,33 +113,54 @@ def check_inters(items, ray):
     return inters_pairs
 
 
-def find_intersection_sphere(sphere,ray):
+def find_intersection_sphere(sphere, ray):
     r = sphere.radius
     m, p = ray
     C = sphere.position
+    p_minus_C = p - C
+
     a = np.dot(m, m)
-    b = 2*np.dot(m, p - C)
-    c = np.dot(p-C, p - C) - r**2
-    disc = b**2-4*a*c
+    b = 2 * np.dot(m, p_minus_C)
+    c = np.dot(p_minus_C, p_minus_C) - r ** 2
+    disc = b ** 2 - 4 * a * c
+
     if disc < 0:
-        return []
-    else:
-        i1 = find_point_in_line(ray, (b+np.sqrt(disc))/(2*a))
-        i2 = find_point_in_line(ray, (b - np.sqrt(disc)) / (2 * a))
-        return [i1, i2]
+        return []  # No intersection
+
+    sqrt_disc = np.sqrt(disc)
+    t1 = (-b + sqrt_disc) / (2 * a)
+    t2 = (-b - sqrt_disc) / (2 * a)
+
+    # We want to return the closest intersection point in front of the camera
+    t_min = min(t1, t2)
+    t_max = max(t1, t2)
+
+    if t_max < 0:
+        return []  # Both intersections are behind the camera
+
+    if t_min < 0:
+        t_min = t_max  # If t_min is negative, choose the farther point which is t_max
+
+    if t_min < 0:
+        return []  # All intersections are behind the camera
+
+    # Return the closest valid intersection point
+    return [p + t_min * m]
 
 
-def find_intersection_plane(plane,ray):
+
+def find_intersection_plane(plane, ray):
     n = np.array(plane.normal)
+    n_normalized = normalize_vec(n)
     m, p = ray
     c = plane.offset
-    if np.dot(m, n) == 0:
-        if (c-np.dot(p, n)) == 0:
+    if abs(np.dot(m, n_normalized)) < EPSILON:
+        if abs((c-np.dot(p, n_normalized))) < EPSILON:
             return [p]
         else:
             return []
     else:
-        return [find_point_in_line(ray, (c-np.dot(p, n))/np.dot(m, n))]
+        return [find_point_in_line(ray, (c-np.dot(p, n_normalized))/np.dot(m, n_normalized))]
 
 
 def find_intersection_cube(cube, ray):
@@ -185,24 +206,26 @@ get_inter_color
 
 
 def get_inter_color(objects, lights, materials, ray, inter_pair, background_color, recursions):
+    material = materials[inter_pair[0].material_index - 1]
     color = np.array([0, 0, 0], dtype='float64')
     for light in lights:
         normal = normal_to_surf(inter_pair[0], inter_pair[1])
-        theta_light = np.dot(normal, inter_pair[1] - light.position)
+        theta_light = np.dot(normalize_vec(normal), normalize_vec(inter_pair[1] - light.position))
         reflected_light = 2 * normal * np.cos(theta_light) - (inter_pair[1] - light.position)
 
         material = materials[inter_pair[0].material_index - 1]
         transparency = material.transparency
 
-        diff_color = np.array(material.diffuse_color) * theta_light * light.color
-        spec_color = np.array(material.specular_color) * (np.dot(reflected_light, ray[0]) ** material.shininess) * light.color  # v = ray, r = reflected_light
+        diff_color = np.array(material.diffuse_color) * 255 * theta_light * light.color
+        spec_color = np.array(material.specular_color) * 255 * (np.dot(normalize_vec(reflected_light), normalize_vec(ray[0]))
+                                                          ** material.shininess) * light.color  # v = ray, r = reflected_light
         reflect_color = np.array([0, 0, 0], dtype='float64')
         if recursions > 0:
             ray_reflect, point_reflect_pair = calc_reflect(objects, inter_pair, ray, normal)
             if point_reflect_pair:
                 material_reflected_color = np.array(materials[point_reflect_pair[1].material_index - 1].reflection_color)
                 reflect_color = get_inter_color(objects, lights, materials, ray_reflect, point_reflect_pair,
-                                                background_color, recursions - 1) * material_reflected_color
+                                                background_color, recursions - 1) * (material_reflected_color * 255)
         color += background_color * transparency + (diff_color + spec_color) * (1 - transparency) + reflect_color
     return color
 
@@ -237,18 +260,18 @@ def normal_to_cube(cube, point):
     elif np.isclose(z_p, z_c - half_edge):
         normals.append(np.array([0, 0, -1]))
     average_normal = np.mean(normals, axis=0)
-    return average_normal / np.linalg.norm(average_normal)
+    return normalize_vec(average_normal)
 
 
 def normal_to_sphere(sphere, point):
     x_c, y_c, z_c = sphere.position
     x_p, y_p, z_p = point
     normal_vec = np.array([x_p - x_c, y_p - y_c, z_p - z_c])
-    normal_vec_normalized = normal_vec / np.linalg.norm(normal_vec)
+    normal_vec_normalized = normalize_vec(normal_vec)
     return normal_vec_normalized
 
 def calc_reflect(objects, inter_pair, ray, normal):
-    theta_ray = np.dot(normal, ray)
+    theta_ray = np.dot(normalize_vec(normal), normalize_vec(ray))
     reflected_ray = (2 * normal * np.cos(theta_ray) - ray[0], inter_pair[1])
     objects.remove(inter_pair[0])
     inters_pairs = check_inters(objects, reflected_ray)
@@ -264,22 +287,41 @@ def produce_soft_shadow(nearest_inter):
     pass
 
 
+def normalize_vec(vec):
+    norm = np.linalg.norm(vec)
+    if norm == 0:
+        return vec
+    return vec / norm
+
+
 def ray_tracer(args, camera, scene_settings, objects):
-    w = int(camera.screen_width)
-    h = int(w / args.width * args.height)
+    w = args.width
+    h = args.height
+    screen_height = camera.screen_width / w * h
+    pixel_width = camera.screen_width / w
+    pixel_height = screen_height / h
     E = np.array(camera.position)
-    V_x, V_y, V_z = calc_camera_axis(E, np.array(camera.up_vector), np.array(camera.look_at))
-    P = E + V_z * camera.screen_distance  # middle pixel
+    look_at = normalize_vec(np.array(camera.look_at) - E)
+    up = np.array(camera.up_vector)
+    up = normalize_vec(up - normalize_vec(look_at) * (np.dot(look_at, up) / np.linalg.norm(look_at)))
+
+    right = normalize_vec(np.cross(up, look_at))
+    move_right = right * pixel_width
+    move_down = up * (-pixel_height)
+    height_vec = look_at * camera.screen_distance
+    width_vec = (-camera.screen_width / 2) * right
+    up_by_height_vec = up * (screen_height / 2)
+    P = E + height_vec  # middle pixel
     # set pos to P0:
-    P0 = P - (w / 2) * V_x - (h / 2) * V_y  # this is changing in every loop iterate
-    pos = P0
+    P0 = P + width_vec + up_by_height_vec + move_down * 0.5
     image_array = np.zeros((500, 500, 3))
     for i in range(h):
+        pos = P0   # this is changing in every loop iterate
         for j in range(w):
-            pos = P0
             # 1.2
-            ray = (pos - E, E)
+            ray = (normalize_vec(pos - E), E)
             # 2
+
             inters_pairs = check_inters(objects, ray)
             # 3
             nearest_inter_pair = find_nearest_inter_pair(ray, inters_pairs)
@@ -290,17 +332,19 @@ def ray_tracer(args, camera, scene_settings, objects):
                                         nearest_inter_pair, np.array(scene_settings.background_color),
                                         scene_settings.max_recursions)
             else:
-                color = np.array([0, 0, 0], dtype='unit8')
+                color = np.array([0, 0, 0], dtype='uint8')
             """#5
             light_hits = light_hits(nearest_inter)
             if light_hits:
                 #6
                 soft_shadow = produce_soft_shadow(nearest_inter)"""
             image_array[i, j] = color.astype('uint8')
-            pos += V_x
-        P0 += V_y
+            pos += move_right
+        if i % 50 == 0:
+            print("progress " + str(i) + "\tcolor " + str(image_array[i, 0]) + "\t0-1 scale "+str(image_array[i, 0] / 255))
+        pos -= w * move_right
+        pos += move_down
     return image_array
-
 
 
 
