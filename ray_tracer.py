@@ -104,14 +104,18 @@ def check_inters(items, ray):
     # return a list with all the intersections with items in the space
     inters_pairs = [] # paris of item and intersection on it
     for item in items:
-        if isinstance(item, Sphere):
-            inters_pairs += [(item, inter) for inter in find_intersection_sphere(item, ray)]
-        if isinstance(item, InfinitePlane):
-            inters_pairs += [(item, inter) for inter in find_intersection_plane(item, ray)]
-        if isinstance(item, Cube):
-            inters_pairs += [(item, inter) for inter in find_intersection_cube(item, ray)]
+        inters_pairs += check_inter(item, ray)
     return inters_pairs
 
+
+def check_inter(item, ray):
+    if isinstance(item, Sphere):
+        return [(item, inter) for inter in find_intersection_sphere(item, ray)]
+    if isinstance(item, InfinitePlane):
+        return [(item, inter) for inter in find_intersection_plane(item, ray)]
+    if isinstance(item, Cube):
+        return [(item, inter) for inter in find_intersection_cube(item, ray)]
+    return []
 
 def find_intersection_sphere(sphere, ray):
     r = sphere.radius
@@ -205,37 +209,66 @@ get_inter_color
 """
 
 
-def get_inter_color(objects, lights, materials, ray, inter_pair, background_color, recursions, i, j):
+def get_inter_color(objects, lights, materials, ray, inter_pair, background_color, recursions, shadows_amount):
     color = np.array([0, 0, 0], dtype='float64')
+    normal = normal_to_surf(inter_pair[0], inter_pair[1])
+    material = materials[inter_pair[0].material_index - 1]
+    transparency = material.transparency
     for light in lights:
-        normal = normal_to_surf(inter_pair[0], inter_pair[1])
         light_minus_point = normalize_vec(light.position - inter_pair[1])
         theta_light = np.dot(normalize_vec(normal), light_minus_point)
-        reflected_light = light_minus_point - normal * (2 * theta_light) # 2 * normal * np.cos(theta_light) - (inter_pair[1] - light.position)
+        reflected_light = light_minus_point - normal * (2 * theta_light)
+        start = inter_pair[1] + light_minus_point
+        shade_ray_fraction = 1.0 / shadows_amount / shadows_amount * light.shadow_intensity
+        # 2 * normal * np.cos(theta_light) - (inter_pair[1] - light.position)
+        """light_width_r = normalize_vec(np.cross(light_minus_point, light_minus_point + 7)) * light.radius
+        light_width_d = np.cross(light_width_r, normalize_vec(light_minus_point)) * light.radius"""
+        """
+        # Iterate over shade ray pairs
+        for i in range(shadows_amount):
+            for j in range(shadows_amount):
+                random_up = random.random()
+                random_right = random.random()
+                vec = light_width_d * ((-shadows_amount / 2 + j + random_up - 0.5) * 1 / shadows_amount)
+                vec2 = light_width_r * ((-shadows_amount / 2 + i + random_right - 0.5) * 1 / shadows_amount)
+                nearest_light_point = light.position + vec + vec2
+                shade_direction_reversed = normalize_vec(nearest_light_point - start) 
+                ray_norm = np.linalg.norm(start - nearest_light_point)
+                light_left_in_ray = 1.0
+                for item in objects:
+                    curr_ray = ( shade_direction_reversed, start + shade_direction_reversed)
+                    shadow_hit = check_inter(item, curr_ray)
+                    if shadow_hit != [] and np.linalg.norm(shadow_hit[1] - start) < ray_norm:
+                        light_left_in_ray *= item.material.transparency
+                        if light_left_in_ray < 0:
+                            light_left_in_ray = 0
+                            break
+                illumination -= shade_ray_fraction * (1 - light_left_in_ray)
 
-        material = materials[inter_pair[0].material_index - 1]
-        transparency = material.transparency
-
-        diff_color = np.clip(np.array(material.diffuse_color) * 255 * theta_light * light.color, 0, 255)
-
-
-        spec_color = (np.array(material.specular_color) * 255 * light.specular_intensity *
-                      (np.dot(normalize_vec(reflected_light), normalize_vec(ray[0]))
-                                                          ** material.shininess) * light.color)  # v = ray, r = reflected_light
+        if illumination > 0:
+            diff_color = np.clip(np.array(material.diffuse_color) * 255 * theta_light * light.color, 0, 255)
+            spec_color = (np.array(material.specular_color) * 255 * light.specular_intensity *
+                          (np.dot(normalize_vec(reflected_light), normalize_vec(ray[0]))
+                                                              ** material.shininess) * light.color)
+            color += diff_color + spec_color
+            """
+          # v = ray, r = reflected_light
         """if (spec_color[0] != 0) or (spec_color[1] != 0) or (spec_color[2] != 0):
             print("here with "+str(i)+" "+str(j))"""
-        color += diff_color + spec_color
-        """
-        reflect_color = np.array([0, 0, 0], dtype='float64')
-
-        if recursions > 0:
-              ray_reflect, point_reflect_pair = calc_reflect(objects, inter_pair, ray, normal)
-              if point_reflect_pair:
-                  material_reflected_color = np.array(materials[point_reflect_pair[1].material_index - 1].reflection_color)
-                  reflect_color += get_inter_color(objects, lights, materials, ray_reflect, point_reflect_pair,background_color, recursions-1)
-        #                                       (material_reflected_color * 255)
-        color += (background_color * transparency + (diff_color + spec_color) * (1 - transparency) + reflect_color)
-        """
+    diff_color = np.clip(np.array(material.diffuse_color) * 255 * theta_light * light.color, 0, 255)
+    spec_color = (np.array(material.specular_color) * 255 * light.specular_intensity *
+                  (np.dot(normalize_vec(reflected_light), normalize_vec(ray[0]))
+                   ** material.shininess) * light.color)
+    color += diff_color + spec_color
+    reflect_color = np.array([0, 0, 0], dtype='float64')
+    if recursions > 0:
+        ray_reflect, point_reflect_pair = calc_reflect(objects, inter_pair, ray, normal)
+        if point_reflect_pair:
+            reflect_color += get_inter_color(objects, lights, materials, ray_reflect, point_reflect_pair,
+                                             background_color, recursions - 1, shadows_amount) * (np.array(material.reflection_color))
+    #color += (background_color * transparency + (diff_color + spec_color) * (1 - transparency) + reflect_color)
+    #color += background_color
+            color += reflect_color
     return np.clip(color, 0, 255)
 
 
@@ -279,12 +312,20 @@ def normal_to_sphere(sphere, point):
     normal_vec_normalized = normalize_vec(normal_vec)
     return normal_vec_normalized
 
+
 def calc_reflect(objects, inter_pair, ray, normal):
+    """
+    old method:
     theta_ray = np.dot(normalize_vec(normal), normalize_vec(ray[0]))
     reflected_ray = (2 * normal * np.cos(theta_ray) - ray[0], inter_pair[1])
-    objects.remove(inter_pair[0])
+    new method:
+    """
+    theta_ray = np.dot(normalize_vec(normal), ray[0])
+    reflected_ray = (ray[0] - normal * (2 * theta_ray), inter_pair[1])
+    objects = [o for o in objects if (o != inter_pair[0])]
     inters_pairs = check_inters(objects, reflected_ray)
     return reflected_ray, find_nearest_inter_pair(ray, inters_pairs)
+
 
 def get_pixel_color(nearest_inter):
     pass
@@ -337,7 +378,9 @@ def ray_tracer(args, camera, scene_settings, objects):
             # 4
             if nearest_inter_pair:
                 materials = [item for item in objects if isinstance(item, Material)]
-                color = get_inter_color(objects, [item for item in objects if isinstance(item, Light)], materials, ray, nearest_inter_pair, np.array(scene_settings.background_color), scene_settings.max_recursions, i, j)
+                color = get_inter_color(objects, [item for item in objects if isinstance(item, Light)], materials, ray,
+                                        nearest_inter_pair, np.array(scene_settings.background_color),
+                                        scene_settings.max_recursions, scene_settings.root_number_shadow_rays)
 
 
             else:
