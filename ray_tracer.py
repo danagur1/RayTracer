@@ -205,12 +205,13 @@ get_inter_color
 """
 
 
-def get_inter_color(objects, lights, materials, ray, inter_pair, background_color, recursions):
+def get_inter_color(objects, lights, materials, ray, inter_pair, background_color, recursions, i, j):
     color = np.array([0, 0, 0], dtype='float64')
     for light in lights:
         normal = normal_to_surf(inter_pair[0], inter_pair[1])
-        theta_light = np.dot(normalize_vec(normal), normalize_vec(light.position - inter_pair[1]))
-        reflected_light = 2 * normal * np.cos(theta_light) - (inter_pair[1] - light.position)
+        light_minus_point = normalize_vec(light.position - inter_pair[1])
+        theta_light = np.dot(normalize_vec(normal), light_minus_point)
+        reflected_light = light_minus_point - normal * (2 * theta_light) # 2 * normal * np.cos(theta_light) - (inter_pair[1] - light.position)
 
         material = materials[inter_pair[0].material_index - 1]
         transparency = material.transparency
@@ -218,8 +219,13 @@ def get_inter_color(objects, lights, materials, ray, inter_pair, background_colo
         diff_color = np.clip(np.array(material.diffuse_color) * 255 * theta_light * light.color, 0, 255)
 
 
-        spec_color = np.array(material.specular_color) * 255 * (np.dot(normalize_vec(reflected_light), normalize_vec(ray[0]))
-                                                          ** material.shininess) * light.color  # v = ray, r = reflected_light
+        spec_color = (np.array(material.specular_color) * 255 * light.specular_intensity *
+                      (np.dot(normalize_vec(reflected_light), normalize_vec(ray[0]))
+                                                          ** material.shininess) * light.color)  # v = ray, r = reflected_light
+        """if (spec_color[0] != 0) or (spec_color[1] != 0) or (spec_color[2] != 0):
+            print("here with "+str(i)+" "+str(j))"""
+        color += diff_color + spec_color
+        """
         reflect_color = np.array([0, 0, 0], dtype='float64')
 
         if recursions > 0:
@@ -229,6 +235,7 @@ def get_inter_color(objects, lights, materials, ray, inter_pair, background_colo
                   reflect_color += get_inter_color(objects, lights, materials, ray_reflect, point_reflect_pair,background_color, recursions-1)
         #                                       (material_reflected_color * 255)
         color += (background_color * transparency + (diff_color + spec_color) * (1 - transparency) + reflect_color)
+        """
     return np.clip(color, 0, 255)
 
 
@@ -330,7 +337,7 @@ def ray_tracer(args, camera, scene_settings, objects):
             # 4
             if nearest_inter_pair:
                 materials = [item for item in objects if isinstance(item, Material)]
-                color = get_inter_color(objects, [item for item in objects if isinstance(item, Light)], materials, ray, nearest_inter_pair, np.array(scene_settings.background_color), scene_settings.max_recursions)
+                color = get_inter_color(objects, [item for item in objects if isinstance(item, Light)], materials, ray, nearest_inter_pair, np.array(scene_settings.background_color), scene_settings.max_recursions, i, j)
 
 
             else:
