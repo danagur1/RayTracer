@@ -206,7 +206,6 @@ get_inter_color
 
 
 def get_inter_color(objects, lights, materials, ray, inter_pair, background_color, recursions):
-    material = materials[inter_pair[0].material_index - 1]
     color = np.array([0, 0, 0], dtype='float64')
     for light in lights:
         normal = normal_to_surf(inter_pair[0], inter_pair[1])
@@ -217,18 +216,19 @@ def get_inter_color(objects, lights, materials, ray, inter_pair, background_colo
         transparency = material.transparency
 
         diff_color = np.clip(np.array(material.diffuse_color) * 255 * theta_light * light.color, 0, 255)
-        color += diff_color
-        """
+
+
         spec_color = np.array(material.specular_color) * 255 * (np.dot(normalize_vec(reflected_light), normalize_vec(ray[0]))
                                                           ** material.shininess) * light.color  # v = ray, r = reflected_light
         reflect_color = np.array([0, 0, 0], dtype='float64')
+
         if recursions > 0:
-            ray_reflect, point_reflect_pair = calc_reflect(objects, inter_pair, ray, normal)
-            if point_reflect_pair:
-                material_reflected_color = np.array(materials[point_reflect_pair[1].material_index - 1].reflection_color)
-                reflect_color = get_inter_color(objects, lights, materials, ray_reflect, point_reflect_pair,
-                                                background_color, recursions - 1) * (material_reflected_color * 255)
-        color += background_color * transparency + (diff_color + spec_color) * (1 - transparency) + reflect_color"""
+              ray_reflect, point_reflect_pair = calc_reflect(objects, inter_pair, ray, normal)
+              if point_reflect_pair:
+                  material_reflected_color = np.array(materials[point_reflect_pair[1].material_index - 1].reflection_color)
+                  reflect_color += get_inter_color(objects, lights, materials, ray_reflect, point_reflect_pair,background_color, recursions-1)
+        #                                       (material_reflected_color * 255)
+        color += (background_color * transparency + (diff_color + spec_color) * (1 - transparency) + reflect_color)
     return np.clip(color, 0, 255)
 
 
@@ -273,7 +273,7 @@ def normal_to_sphere(sphere, point):
     return normal_vec_normalized
 
 def calc_reflect(objects, inter_pair, ray, normal):
-    theta_ray = np.dot(normalize_vec(normal), normalize_vec(ray))
+    theta_ray = np.dot(normalize_vec(normal), normalize_vec(ray[0]))
     reflected_ray = (2 * normal * np.cos(theta_ray) - ray[0], inter_pair[1])
     objects.remove(inter_pair[0])
     inters_pairs = check_inters(objects, reflected_ray)
@@ -330,9 +330,9 @@ def ray_tracer(args, camera, scene_settings, objects):
             # 4
             if nearest_inter_pair:
                 materials = [item for item in objects if isinstance(item, Material)]
-                color = get_inter_color(objects, [item for item in objects if isinstance(item, Light)], materials, ray,
-                                        nearest_inter_pair, np.array(scene_settings.background_color),
-                                        scene_settings.max_recursions)
+                color = get_inter_color(objects, [item for item in objects if isinstance(item, Light)], materials, ray, nearest_inter_pair, np.array(scene_settings.background_color), scene_settings.max_recursions)
+
+
             else:
                 color = np.array([0, 0, 0], dtype='uint8')
             """#5
